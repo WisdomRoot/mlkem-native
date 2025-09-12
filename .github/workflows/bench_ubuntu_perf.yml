@@ -31,7 +31,7 @@ jobs:
       - name: Publish job summary
         run: |
           python3 - <<'PY'
-          import os, re
+          import os, re, platform
           txt = open('bench_512.txt','r',encoding='utf-8',errors='ignore').read()
           m = dict(re.findall(r'(keypair cycles|encaps cycles|decaps cycles)\s*=\s*(\d+)', txt))
           rows = [
@@ -41,13 +41,69 @@ jobs:
           ]
           if not all(k in m for k,_ in rows):
             raise SystemExit('No cycle results found in bench_512.txt')
+          # Collect host CPU/TSC info
+          arch = platform.machine()
+          model = None
+          mhz = None
+          flags = ''
+          try:
+            ci = open('/proc/cpuinfo','r',encoding='utf-8',errors='ignore').read()
+            mm = re.search(r'^model name\s*:\s*(.+)$', ci, flags=re.M)
+            if mm: model = mm.group(1).strip()
+            fm = re.search(r'^cpu MHz\s*:\s*([0-9.]+)$', ci, flags=re.M)
+            if fm: mhz = float(fm.group(1))
+            fl = re.search(r'^flags\s*:\s*(.+)$', ci, flags=re.M)
+            if fl: flags = fl.group(1)
+          except Exception:
+            pass
+          current_clock = None
+          avail_clock = None
+          try:
+            current_clock = open('/sys/devices/system/clocksource/clocksource0/current_clocksource').read().strip()
+          except Exception:
+            pass
+          try:
+            avail_clock = open('/sys/devices/system/clocksource/clocksource0/available_clocksource').read().strip()
+          except Exception:
+            pass
+
+          invariant = 'constant_tsc' in flags or 'nonstop_tsc' in flags
+
+          # Build summary
           lines = []
-          lines.append('## ML-KEM-512 Cycle Counts (PMU/RDTSC)')
+          lines.append('## ML-KEM-512 TSC Tick Counts (x86_64 via RDTSC)')
           lines.append('')
-          lines.append('| Primitive | Cycles |')
+          lines.append('- Note: These are TSC ticks (PMU=RDTSC), not core cycles.')
+          lines.append('- Approximate time conversion uses /proc/cpuinfo cpu MHz and is an estimate.')
+          lines.append('')
+          lines.append('| Primitive | TSC ticks |')
           lines.append('|---|---:|')
           for key,label in rows:
             lines.append(f"| {label} | {int(m[key]):,} |")
+
+          # Optional approximate times in microseconds
+          if mhz:
+            lines.append('')
+            lines.append('| Primitive | Approx time (µs) |')
+            lines.append('|---|---:|')
+            for key,label in rows:
+              us = float(m[key]) / mhz
+              lines.append(f"| {label} | {us:,.2f} |")
+
+          # Host/clock info
+          lines.append('')
+          lines.append('### Host Info')
+          lines.append(f"- Arch: {arch}")
+          if model:
+            lines.append(f"- CPU: {model}")
+          if mhz:
+            lines.append(f"- cpu MHz (reported): {mhz:.2f}")
+          if flags:
+            lines.append(f"- Invariant TSC flags: {'yes' if invariant else 'no'} (flags include: {'constant_tsc' if 'constant_tsc' in flags else '-'}, {'nonstop_tsc' if 'nonstop_tsc' in flags else '-'})")
+          if current_clock:
+            lines.append(f"- current_clocksource: {current_clock}")
+          if avail_clock:
+            lines.append(f"- available_clocksource: {avail_clock}")
           with open(os.environ['GITHUB_STEP_SUMMARY'],'a',encoding='utf-8') as f:
             f.write("\n".join(lines) + "\n")
           PY
