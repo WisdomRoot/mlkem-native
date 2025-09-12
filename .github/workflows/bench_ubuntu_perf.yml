@@ -28,30 +28,26 @@ jobs:
         run: |
           make run_bench_512 CYCLES=PMU | tee bench_512.txt
 
-      - name: Extract bench.json
+      - name: Publish job summary
         run: |
           python3 - <<'PY'
-          import re, json
+          import os, re
           txt = open('bench_512.txt','r',encoding='utf-8',errors='ignore').read()
           m = dict(re.findall(r'(keypair cycles|encaps cycles|decaps cycles)\s*=\s*(\d+)', txt))
-          order = [
-              ('keypair cycles','ML-KEM-512 keypair'),
-              ('encaps cycles','ML-KEM-512 encaps'),
-              ('decaps cycles','ML-KEM-512 decaps'),
+          rows = [
+            ('keypair cycles','Keypair'),
+            ('encaps cycles','Encaps'),
+            ('decaps cycles','Decaps'),
           ]
-          out = [
-            {'name': name, 'unit': 'cycles', 'value': int(m[k])}
-            for k, name in order if k in m
-          ]
-          if not out:
+          if not all(k in m for k,_ in rows):
             raise SystemExit('No cycle results found in bench_512.txt')
-          open('bench.json','w').write(json.dumps(out))
+          lines = []
+          lines.append('## ML-KEM-512 Cycle Counts (PMU/RDTSC)')
+          lines.append('')
+          lines.append('| Primitive | Cycles |')
+          lines.append('|---|---:|')
+          for key,label in rows:
+            lines.append(f"| {label} | {int(m[key]):,} |")
+          with open(os.environ['GITHUB_STEP_SUMMARY'],'a',encoding='utf-8') as f:
+            f.write("\n".join(lines) + "\n")
           PY
-
-      - name: Upload artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: bench-pmu-512
-          path: |
-            bench_512.txt
-            bench.json
