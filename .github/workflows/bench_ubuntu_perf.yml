@@ -34,6 +34,14 @@ jobs:
           import os, re, platform
           txt = open('bench_512.txt','r',encoding='utf-8',errors='ignore').read()
           m = dict(re.findall(r'(keypair cycles|encaps cycles|decaps cycles)\s*=\s*(\d+)', txt))
+          # Parse percentile lines, e.g. "keypair percentiles:   1% 10% ... 99%"
+          pct_map = {}
+          for prim in ('keypair','encaps','decaps'):
+            mo = re.search(rf'^\s*{prim}\s+percentiles:\s+(.+)$', txt, flags=re.M)
+            if mo:
+              # Split on whitespace and keep numeric fields
+              nums = [int(x) for x in mo.group(1).split() if x.isdigit()]
+              pct_map[prim] = nums
           rows = [
             ('keypair cycles','Keypair'),
             ('encaps cycles','Encaps'),
@@ -74,21 +82,27 @@ jobs:
           lines.append('## ML-KEM-512 TSC Tick Counts (x86_64 via RDTSC)')
           lines.append('')
           lines.append('- Note: These are TSC ticks (PMU=RDTSC), not core cycles.')
-          lines.append('- Approximate time conversion uses /proc/cpuinfo cpu MHz and is an estimate.')
           lines.append('')
-          lines.append('| Primitive | TSC ticks |')
-          lines.append('|---|---:|')
-          for key,label in rows:
-            lines.append(f"| {label} | {int(m[key]):,} |")
+          # We will only show percentiles (ticks), so omit a separate median table
 
-          # Optional approximate times in microseconds
-          if mhz:
+          # Percentiles table (TSC ticks)
+          # Bench prints percentiles for [1,10,20,30,40,50,60,70,80,90,99]
+          idx = {50:5, 90:9, 99:10}
+          prims = ('keypair','encaps','decaps')
+          have_pcts = all(prim in pct_map and len(pct_map[prim]) >= max(idx.values())+1 for prim in prims)
+          if have_pcts:
             lines.append('')
-            lines.append('| Primitive | Approx time (µs) |')
-            lines.append('|---|---:|')
-            for key,label in rows:
-              us = float(m[key]) / mhz
-              lines.append(f"| {label} | {us:,.2f} |")
+            lines.append('### Percentiles (TSC ticks per op)')
+            lines.append('| Primitive | P50 | P90 | P99 |')
+            lines.append('|---|---:|---:|---:|')
+            name_map = {'keypair':'Keypair','encaps':'Encaps','decaps':'Decaps'}
+            for prim in prims:
+              p50 = pct_map[prim][idx[50]]
+              p90 = pct_map[prim][idx[90]]
+              p99 = pct_map[prim][idx[99]]
+              lines.append(f"| {name_map[prim]} | {p50:,} | {p90:,} | {p99:,} |")
+
+          # No µs table: we only report TSC ticks (P50/P90/P99)
 
           # Host/clock info
           lines.append('')
@@ -98,12 +112,6 @@ jobs:
             lines.append(f"- CPU: {model}")
           if mhz:
             lines.append(f"- cpu MHz (reported): {mhz:.2f}")
-          if flags:
-            lines.append(f"- Invariant TSC flags: {'yes' if invariant else 'no'} (flags include: {'constant_tsc' if 'constant_tsc' in flags else '-'}, {'nonstop_tsc' if 'nonstop_tsc' in flags else '-'})")
-          if current_clock:
-            lines.append(f"- current_clocksource: {current_clock}")
-          if avail_clock:
-            lines.append(f"- available_clocksource: {avail_clock}")
           with open(os.environ['GITHUB_STEP_SUMMARY'],'a',encoding='utf-8') as f:
             f.write("\n".join(lines) + "\n")
           PY
