@@ -27,6 +27,30 @@ static int cmp_uint64_t(const void *a, const void *b)
   return (int)((*((const uint64_t *)a)) - (*((const uint64_t *)b)));
 }
 
+static int percentiles[] = {1, 10, 20, 30, 40, 50, 60, 70, 80, 90, 99};
+
+static void print_percentile_legend(void)
+{
+  unsigned i;
+  printf("%21s", "percentile");
+  for (i = 0; i < sizeof(percentiles) / sizeof(percentiles[0]); i++)
+  {
+    printf("%7d", percentiles[i]);
+  }
+  printf("\n");
+}
+
+static void print_percentiles(const char *txt, uint64_t cyc[NTESTS])
+{
+  unsigned i;
+  printf("%10s percentiles:", txt);
+  for (i = 0; i < sizeof(percentiles) / sizeof(percentiles[0]); i++)
+  {
+    printf("%7" PRIu64, (cyc)[NTESTS * percentiles[i] / 100] / NITERATIONS);
+  }
+  printf("\n");
+}
+
 #define BENCH(txt, code)                                \
   for (i = 0; i < NTESTS; i++)                          \
   {                                                     \
@@ -49,7 +73,9 @@ static int cmp_uint64_t(const void *a, const void *b)
     (cyc)[i] = t1 - t0;                                 \
   }                                                     \
   qsort((cyc), NTESTS, sizeof(uint64_t), cmp_uint64_t); \
-  printf(txt " cycles=%" PRIu64 "\n", (cyc)[NTESTS >> 1] / NITERATIONS);
+  printf(txt " cycles=%" PRIu64 "\n", (cyc)[NTESTS >> 1] / NITERATIONS); \
+  do { static int __legend = 0; if (!__legend) { print_percentile_legend(); __legend = 1; } } while (0); \
+  print_percentiles(txt, (cyc));
 
 static int bench(void)
 {

@@ -28,28 +28,84 @@ jobs:
         run: |
           make run_bench_512 CYCLES=PMU EXEC_WRAPPER="taskset -c 0" | tee bench_512.txt
 
+      - name: Build ML-KEM-512 component benchmark (optimized)
+        run: make bench_components_512 CYCLES=PMU OPT=1 -j"$(nproc)"
+
+      - name: Run ML-KEM-512 component benchmark (capture output)
+        run: |
+          make run_bench_components_512 CYCLES=PMU EXEC_WRAPPER="taskset -c 0" | tee bench_components_512.txt
+
       - name: Publish job summary
         run: |
           python3 - <<'PY'
           import os, re, platform
+          # Read main bench output
           txt = open('bench_512.txt','r',encoding='utf-8',errors='ignore').read()
-          m = dict(re.findall(r'(keypair cycles|encaps cycles|decaps cycles)\s*=\s*(\d+)', txt))
-          # Parse percentile lines, e.g. "keypair percentiles:   1% 10% ... 99%"
-          pct_map = {}
+          med = dict(re.findall(r'(keypair cycles|encaps cycles|decaps cycles)\s*=\s*(\d+)', txt))
+          # Parse percentile legend (to learn which percentiles are printed)
+          legend = re.search(r'^\s*percentile\s+(.+)$', txt, flags=re.M)
+          perc_labels = []
+          if legend:
+            perc_labels = [int(x) for x in legend.group(1).split() if x.isdigit()]
+
+          # Percentiles per primitive (values aligned to perc_labels)
+          pct = {}
           for prim in ('keypair','encaps','decaps'):
             mo = re.search(rf'^\s*{prim}\s+percentiles:\s+(.+)$', txt, flags=re.M)
             if mo:
-              # Split on whitespace and keep numeric fields
               nums = [int(x) for x in mo.group(1).split() if x.isdigit()]
-              pct_map[prim] = nums
+              pct[prim] = nums
+          # Alias for unified handling later
+          pct_main = pct
+
           rows = [
             ('keypair cycles','Keypair'),
             ('encaps cycles','Encaps'),
             ('decaps cycles','Decaps'),
           ]
-          if not all(k in m for k,_ in rows):
+          if not all(k in med for k,_ in rows):
             raise SystemExit('No cycle results found in bench_512.txt')
-          # Collect host CPU/TSC info
+
+          # Read component bench output (optional)
+          comp = {}
+          pct_comp = {}
+          try:
+            ctxt = open('bench_components_512.txt','r',encoding='utf-8',errors='ignore').read()
+            # Component percentile legend
+            legend_c = re.search(r'^\s*percentile\s+(.+)$', ctxt, flags=re.M)
+            labels_c = [1,10,20,30,40,50,60,70,80,90,99]
+            if legend_c:
+              labels_c = [int(x) for x in legend_c.group(1).split() if x.isdigit()]
+            # Generic polyvec labels
+            m_ntt = re.search(r'^\s*mlk_polyvec_ntt\s+cycles\s*=\s*(\d+)', ctxt, flags=re.M)
+            if m_ntt:
+              comp['NTT'] = int(m_ntt.group(1))
+            m_intt = re.search(r'^\s*mlk_polyvec_invntt_tomont\s+cycles\s*=\s*(\d+)', ctxt, flags=re.M)
+            if m_intt:
+              comp['INTT'] = int(m_intt.group(1))
+            p_ntt = re.search(r'^\s*mlk_polyvec_ntt\s+percentiles:\s+(.+)$', ctxt, flags=re.M)
+            if p_ntt:
+              pct_comp['NTT'] = [int(x) for x in p_ntt.group(1).split() if x.isdigit()]
+            p_intt = re.search(r'^\s*mlk_polyvec_invntt_tomont\s+percentiles:\s+(.+)$', ctxt, flags=re.M)
+            if p_intt:
+              pct_comp['INTT'] = [int(x) for x in p_intt.group(1).split() if x.isdigit()]
+            # AArch64 native labels (if present)
+            m_ntt_n = re.search(r'^\s*ntt-native\s+cycles\s*=\s*(\d+)', ctxt, flags=re.M)
+            if m_ntt_n and 'NTT' not in comp:
+              comp['NTT'] = int(m_ntt_n.group(1))
+            m_intt_n = re.search(r'^\s*intt-native\s+cycles\s*=\s*(\d+)', ctxt, flags=re.M)
+            if m_intt_n and 'INTT' not in comp:
+              comp['INTT'] = int(m_intt_n.group(1))
+            p_ntt_n = re.search(r'^\s*ntt-native\s+percentiles:\s+(.+)$', ctxt, flags=re.M)
+            if p_ntt_n and 'NTT' not in pct_comp:
+              pct_comp['NTT'] = [int(x) for x in p_ntt_n.group(1).split() if x.isdigit()]
+            p_intt_n = re.search(r'^\s*intt-native\s+percentiles:\s+(.+)$', ctxt, flags=re.M)
+            if p_intt_n and 'INTT' not in pct_comp:
+              pct_comp['INTT'] = [int(x) for x in p_intt_n.group(1).split() if x.isdigit()]
+          except FileNotFoundError:
+            pass
+
+          # Host info
           arch = platform.machine()
           model = None
           mhz = None
@@ -83,35 +139,47 @@ jobs:
           lines.append('')
           lines.append('- Note: These are TSC ticks (PMU=RDTSC), not core cycles.')
           lines.append('')
-          # We will only show percentiles (ticks), so omit a separate median table
 
-          # Percentiles table (TSC ticks)
-          # Bench prints percentiles for [1,10,20,30,40,50,60,70,80,90,99]
-          idx = {50:5, 90:9, 99:10}
-          prims = ('keypair','encaps','decaps')
-          have_pcts = all(prim in pct_map and len(pct_map[prim]) >= max(idx.values())+1 for prim in prims)
-          if have_pcts:
-            lines.append('')
-            lines.append('### Percentiles (TSC ticks per op)')
-            lines.append('| Primitive | P50 | P90 | P99 |')
-            lines.append('|---|---:|---:|---:|')
-            name_map = {'keypair':'Keypair','encaps':'Encaps','decaps':'Decaps'}
-            for prim in prims:
-              p50 = pct_map[prim][idx[50]]
-              p90 = pct_map[prim][idx[90]]
-              p99 = pct_map[prim][idx[99]]
+          # Unified percentiles table with P50/P90/P99 for primitives and NTT/INTT (if available)
+          want = [50, 90, 99]
+          base = [1,10,20,30,40,50,60,70,80,90,99]
+          idx_main = {p: (perc_labels.index(p) if 'perc_labels' in locals() and p in perc_labels else base.index(p)) for p in want}
+          idx_comp = {p: (labels_c.index(p) if 'labels_c' in locals() and p in labels_c else base.index(p)) for p in want}
+
+          lines.append('### Percentiles (TSC ticks per op)')
+          lines.append('| Primitive | P50 | P90 | P99 |')
+          lines.append('|---|---:|---:|---:|')
+          name_map = {'keypair':'Keypair','encaps':'Encaps','decaps':'Decaps'}
+          for prim in ('keypair','encaps','decaps'):
+            arr = pct_main.get(prim)
+            if arr and max(idx_main.values()) < len(arr):
+              p50 = arr[idx_main[50]]
+              p90 = arr[idx_main[90]]
+              p99 = arr[idx_main[99]]
               lines.append(f"| {name_map[prim]} | {p50:,} | {p90:,} | {p99:,} |")
-
-          # No µs table: we only report TSC ticks (P50/P90/P99)
+          for cname in ('NTT','INTT'):
+            arr = pct_comp.get(cname)
+            if arr and max(idx_comp.values()) < len(arr):
+              p50 = arr[idx_comp[50]]
+              p90 = arr[idx_comp[90]]
+              p99 = arr[idx_comp[99]]
+              lines.append(f"| {cname} | {p50:,} | {p90:,} | {p99:,} |")
+          lines.append('')
 
           # Host/clock info
-          lines.append('')
           lines.append('### Host Info')
           lines.append(f"- Arch: {arch}")
           if model:
             lines.append(f"- CPU: {model}")
           if mhz:
             lines.append(f"- cpu MHz (reported): {mhz:.2f}")
+          if invariant or ('constant_tsc' in flags or 'nonstop_tsc' in flags):
+            lines.append(f"- Invariant TSC flags: {'yes' if invariant else 'no'} (constant_tsc: {'yes' if 'constant_tsc' in flags else 'no'}, nonstop_tsc: {'yes' if 'nonstop_tsc' in flags else 'no'})")
+          if current_clock:
+            lines.append(f"- current_clocksource: {current_clock}")
+          if avail_clock:
+            lines.append(f"- available_clocksource: {avail_clock}")
+
           with open(os.environ['GITHUB_STEP_SUMMARY'],'a',encoding='utf-8') as f:
             f.write("\n".join(lines) + "\n")
           PY
