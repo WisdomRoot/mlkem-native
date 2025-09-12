@@ -26,7 +26,7 @@ jobs:
 
       - name: Run ML-KEM-512 benchmark (capture output)
         run: |
-          make run_bench_512 CYCLES=PMU | tee bench_512.txt
+          make run_bench_512 CYCLES=PMU EXEC_WRAPPER="taskset -c 0" | tee bench_512.txt
 
       - name: Publish job summary
         run: |
