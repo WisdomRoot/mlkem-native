@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0 OR ISC OR MIT
 
-name: Bench (Ubuntu PERF 512)
+name: Bench (Ubuntu PMU 512)
 
 on:
   push:
@@ -9,8 +9,8 @@ permissions:
   contents: read
 
 jobs:
-  bench-perf-512:
-    name: Ubuntu PERF ML-KEM-512
+  bench-pmu-512:
+    name: Ubuntu PMU ML-KEM-512
     runs-on: ubuntu-22.04
     steps:
       - name: Checkout
@@ -21,21 +21,12 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y build-essential python3
 
-      - name: Enable perf for user space
-        run: |
-          # Relax perf restrictions so user processes can open perf events
-          # Prefer the most permissive setting available
-          sudo sysctl -w kernel.perf_event_paranoid=0 || true
-          sudo sysctl -w kernel.perf_event_paranoid=-1 || true
-          sudo sysctl -w kernel.kptr_restrict=0 || true
-
       - name: Build ML-KEM-512 benchmark (optimized)
-        run: make bench_512 CYCLES=PERF OPT=1 -j"$(nproc)"
+        run: make bench_512 CYCLES=PMU OPT=1 -j"$(nproc)"
 
       - name: Run ML-KEM-512 benchmark (capture output)
         run: |
-          # Run the bench binary as root via EXEC_WRAPPER to ensure perf access
-          make run_bench_512 CYCLES=PERF EXEC_WRAPPER="sudo" | tee bench_512.txt
+          make run_bench_512 CYCLES=PMU | tee bench_512.txt
 
       - name: Extract bench.json
         run: |
@@ -60,7 +51,7 @@ jobs:
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: bench-perf-512
+          name: bench-pmu-512
           path: |
             bench_512.txt
             bench.json
