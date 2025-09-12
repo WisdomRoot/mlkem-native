@@ -1,0 +1,62 @@
+# SPDX-License-Identifier: Apache-2.0 OR ISC OR MIT
+
+name: Bench (Ubuntu PERF 512)
+
+on:
+  push:
+
+permissions:
+  contents: read
+
+jobs:
+  bench-perf-512:
+    name: Ubuntu PERF ML-KEM-512
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential python3
+
+      - name: Enable perf for user space
+        run: |
+          # Relax perf restrictions so user processes can open perf events
+          sudo sysctl -w kernel.perf_event_paranoid=1
+          sudo sysctl -w kernel.kptr_restrict=0 || true
+
+      - name: Build ML-KEM-512 benchmark (optimized)
+        run: make bench_512 CYCLES=PERF OPT=1 -j"$(nproc)"
+
+      - name: Run ML-KEM-512 benchmark (capture output)
+        run: sudo make run_bench_512 CYCLES=PERF | tee bench_512.txt
+
+      - name: Extract bench.json
+        run: |
+          python3 - <<'PY'
+          import re, json
+          txt = open('bench_512.txt','r',encoding='utf-8',errors='ignore').read()
+          m = dict(re.findall(r'(keypair cycles|encaps cycles|decaps cycles)\s*=\s*(\d+)', txt))
+          order = [
+              ('keypair cycles','ML-KEM-512 keypair'),
+              ('encaps cycles','ML-KEM-512 encaps'),
+              ('decaps cycles','ML-KEM-512 decaps'),
+          ]
+          out = [
+            {'name': name, 'unit': 'cycles', 'value': int(m[k])}
+            for k, name in order if k in m
+          ]
+          if not out:
+            raise SystemExit('No cycle results found in bench_512.txt')
+          open('bench.json','w').write(json.dumps(out))
+          PY
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: bench-perf-512
+          path: |
+            bench_512.txt
+            bench.json
