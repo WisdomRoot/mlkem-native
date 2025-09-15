@@ -140,31 +140,115 @@ jobs:
           lines.append('- Note: These are TSC ticks (PMU=RDTSC), not core cycles.')
           lines.append('')
 
-          # Unified percentiles table with P50/P90/P99 for primitives and NTT/INTT (if available)
-          want = [50, 90, 99]
-          base = [1,10,20,30,40,50,60,70,80,90,99]
-          idx_main = {p: (perc_labels.index(p) if 'perc_labels' in locals() and p in perc_labels else base.index(p)) for p in want}
-          idx_comp = {p: (labels_c.index(p) if 'labels_c' in locals() and p in labels_c else base.index(p)) for p in want}
+          # Category tables (each with P50/P90/P99)
+          try:
+            want = [50, 90, 99]
+            base = [1,10,20,30,40,50,60,70,80,90,99]
+            labels_m2 = perc_labels if 'perc_labels' in locals() and perc_labels else base
+            idx_m2 = {p: (labels_m2.index(p) if p in labels_m2 else base.index(p)) for p in want}
 
-          lines.append('### Percentiles (TSC ticks per op)')
-          lines.append('| Primitive | P50 | P90 | P99 |')
-          lines.append('|---|---:|---:|---:|')
-          name_map = {'keypair':'Keypair','encaps':'Encaps','decaps':'Decaps'}
-          for prim in ('keypair','encaps','decaps'):
-            arr = pct_main.get(prim)
-            if arr and max(idx_main.values()) < len(arr):
-              p50 = arr[idx_main[50]]
-              p90 = arr[idx_main[90]]
-              p99 = arr[idx_main[99]]
-              lines.append(f"| {name_map[prim]} | {p50:,} | {p90:,} | {p99:,} |")
-          for cname in ('NTT','INTT'):
-            arr = pct_comp.get(cname)
-            if arr and max(idx_comp.values()) < len(arr):
-              p50 = arr[idx_comp[50]]
-              p90 = arr[idx_comp[90]]
-              p99 = arr[idx_comp[99]]
-              lines.append(f"| {cname} | {p50:,} | {p90:,} | {p99:,} |")
-          lines.append('')
+            # Parse component percentiles (all)
+            comps = {}
+            labels_c2 = base
+            try:
+              ctxt2 = open('bench_components_512.txt','r',encoding='utf-8',errors='ignore').read()
+              legend_c2 = re.search(r'^\s*percentile\s+(.+)$', ctxt2, flags=re.M)
+              if legend_c2:
+                labels_c2 = [int(x) for x in legend_c2.group(1).split() if x.isdigit()]
+              for mo in re.finditer(r'^\s*(\S+)\s+percentiles:\s+(.+)$', ctxt2, flags=re.M):
+                name = mo.group(1)
+                vals = [int(x) for x in mo.group(2).split() if x.isdigit()]
+                comps[name] = vals
+            except FileNotFoundError:
+              pass
+            idx_c2 = {p: (labels_c2.index(p) if p in labels_c2 else base.index(p)) for p in want}
+
+            def table(title, rows):
+              lines.append(title)
+              lines.append('| Primitive | P50 | P90 | P99 |')
+              lines.append('|---|---:|---:|---:|')
+              for label, arr, idxs in rows:
+                if not arr:
+                  continue
+                if max(idxs.values()) >= len(arr):
+                  continue
+                p50, p90, p99 = arr[idxs[50]], arr[idxs[90]], arr[idxs[99]]
+                lines.append(f"| {label} | {p50:,} | {p90:,} | {p99:,} |")
+              lines.append('')
+
+            # KEM
+            table('### KEM', [
+              ('Keypair', pct.get('keypair'), idx_m2),
+              ('Encaps',  pct.get('encaps'),  idx_m2),
+              ('Decaps',  pct.get('decaps'),  idx_m2),
+            ])
+
+            # PE
+            table('### PE?', [
+              ('NTT', comps.get('mlk_polyvec_ntt'), idx_c2),
+              ('INTT', comps.get('mlk_polyvec_invntt_tomont'), idx_c2),
+              ('poly_reduce', comps.get('mlk_poly_reduce'), idx_c2),
+              ('poly_tomont', comps.get('mlk_poly_tomont'), idx_c2),
+              ('polyvec_tomont', comps.get('mlk_polyvec_tomont'), idx_c2),
+            ])
+
+            # Keccak
+            table('### Keccak', [
+              ('keccak-f1600-x1', comps.get('keccak-f1600-x1'), idx_c2),
+              ('keccak-f1600-x4', comps.get('keccak-f1600-x4'), idx_c2),
+            ])
+
+            # Matrix/Polynomial Generation
+            table('### Matrix/Polynomial Generation (not sure if this is useful)', [
+              ('mlk_gen_matrix', comps.get('mlk_gen_matrix'), idx_c2),
+              ('mlk_poly_rej_uniform', comps.get('mlk_poly_rej_uniform'), idx_c2),
+              ('mlk_poly_rej_uniform_x4', comps.get('mlk_poly_rej_uniform_x4'), idx_c2),
+            ])
+
+            # Noise Sampling
+            table('### Noise Sampling', [
+              ('mlk_poly_getnoise_eta1_4x', comps.get('mlk_poly_getnoise_eta1_4x'), idx_c2),
+              ('mlk_poly_getnoise_eta2', comps.get('mlk_poly_getnoise_eta2'), idx_c2),
+              ('mlk_poly_getnoise_eta2_4x', comps.get('mlk_poly_getnoise_eta2_4x'), idx_c2),
+              ('mlk_poly_getnoise_eta1122_4x', comps.get('mlk_poly_getnoise_eta1122_4x'), idx_c2),
+            ])
+
+            # Base Multiplication and Caches
+            table('### Base Multiplication and Caches', [
+              ('mlk_poly_mulcache_compute', comps.get('mlk_poly_mulcache_compute'), idx_c2),
+              ('mlk_polyvec_mulcache_compute', comps.get('mlk_polyvec_mulcache_compute'), idx_c2),
+              ('mlk_polyvec_basemul_acc_montgomery_cached', comps.get('mlk_polyvec_basemul_acc_montgomery_cached'), idx_c2),
+            ])
+
+            # Packing/Serialization
+            table('### Packing/Serialization (not sure if this is useful)', [
+              ('mlk_poly_compress_du', comps.get('mlk_poly_compress_du'), idx_c2),
+              ('mlk_poly_decompress_du', comps.get('mlk_poly_decompress_du'), idx_c2),
+              ('mlk_poly_compress_dv', comps.get('mlk_poly_compress_dv'), idx_c2),
+              ('mlk_poly_decompress_dv', comps.get('mlk_poly_decompress_dv'), idx_c2),
+              ('mlk_poly_tobytes', comps.get('mlk_poly_tobytes'), idx_c2),
+              ('mlk_poly_frombytes', comps.get('mlk_poly_frombytes'), idx_c2),
+              ('mlk_polyvec_compress_du', comps.get('mlk_polyvec_compress_du'), idx_c2),
+              ('mlk_polyvec_decompress_du', comps.get('mlk_polyvec_decompress_du'), idx_c2),
+              ('mlk_polyvec_tobytes', comps.get('mlk_polyvec_tobytes'), idx_c2),
+              ('mlk_polyvec_frombytes', comps.get('mlk_polyvec_frombytes'), idx_c2),
+            ])
+
+            # Message Mapping
+            table('### Message Mapping (not sure if this is useful)', [
+              ('mlk_poly_frommsg', comps.get('mlk_poly_frommsg'), idx_c2),
+              ('mlk_poly_tomsg', comps.get('mlk_poly_tomsg'), idx_c2),
+            ])
+
+            # Vector Operations
+            table('### Vector Operations', [
+              ('mlk_poly_add', comps.get('mlk_poly_add'), idx_c2),
+              ('mlk_poly_sub', comps.get('mlk_poly_sub'), idx_c2),
+              ('mlk_polyvec_add', comps.get('mlk_polyvec_add'), idx_c2),
+              ('mlk_polyvec_reduce', comps.get('mlk_polyvec_reduce'), idx_c2),
+            ])
+          except Exception:
+            pass
 
           # Host/clock info
           lines.append('### Host Info')
